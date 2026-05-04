@@ -330,7 +330,7 @@ dependencies = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.136.1" },
     { name = "faster-whisper", specifier = ">=1.2.1" },
-    { name = "metaflow", specifier = ">=2.19.23" },
+    { name = "metaflow", extras = ["ui"], specifier = ">=2.19.23" },
     { name = "mlx-whisper", specifier = ">=0.4.3" },
     { name = "sse-starlette", specifier = ">=3.4.1" },
     { name = "uvicorn", specifier = ">=0.46.0" },

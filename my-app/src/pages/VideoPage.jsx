@@ -31,7 +31,11 @@ export default function VideoPage() {
   const [moments, setMoments] = useState([])
   const [videoInfo, setVideoInfo] = useState(null)
   const [activeIndex, setActiveIndex] = useState(null)
-  
+  const [currentTime, setCurrentTime] = useState(0)
+  const segmentsContainerRef = useRef(null)
+  const transcriptContainerRef = useRef(null)
+  const [isLooping, setIsLooping] = useState(false);
+
   // FIXED: Restored missing Refs
   const playerRef = useRef(null)
   const activeCardRef = useRef(null)
@@ -46,6 +50,15 @@ export default function VideoPage() {
       tag.src = "https://www.youtube.com/iframe_api"
       document.body.appendChild(tag)
     }
+  }, [])
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (playerRef.current && playerRef.current.getCurrentTime) {
+        setCurrentTime(playerRef.current.getCurrentTime());
+      }
+    }, 500)
+    return () => clearInterval(interval)
   }, [])
 
   useEffect(() => {
@@ -77,6 +90,7 @@ export default function VideoPage() {
     })
     evtSource.addEventListener("moment", (e) => {
       setMoments((prev) => [...prev, JSON.parse(e.data)])
+
     })
     evtSource.addEventListener("complete", (e) => {
       setVideoInfo(JSON.parse(e.data))
@@ -92,25 +106,99 @@ export default function VideoPage() {
 
   // Auto-scroll logic
   useEffect(() => {
-    activeCardRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" })
-    activeTranscriptRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" })
-  }, [activeIndex])
+    if (activeCardRef.current && segmentsContainerRef.current) {
+      const container = segmentsContainerRef.current
+      const card = activeCardRef.current
+      const containerRect = container.getBoundingClientRect()
+      const cardRect = card.getBoundingClientRect()
+      const offset = cardRect.top - containerRect.top + container.scrollTop - container.clientHeight / 2 + card.clientHeight / 2
+      container.scrollTo({ top: offset, behavior: "smooth" })
+    }
+
+    if (activeTranscriptRef.current && transcriptContainerRef.current) {
+      const container = transcriptContainerRef.current
+      const line = activeTranscriptRef.current
+      const containerRect = container.getBoundingClientRect()
+      const lineRect = line.getBoundingClientRect()
+      const offset = lineRect.top - containerRect.top + container.scrollTop - container.clientHeight / 2 + line.clientHeight / 2
+      container.scrollTo({ top: offset, behavior: "smooth" })
+    }
+  }, [currentTime])
 
   function seekTo(timestamp_display) {
-    const seconds = parseTimestamp(timestamp_display)
+    const seconds = parseTimestamp(timestamp_display);
     if (playerRef.current?.seekTo) {
-      playerRef.current.seekTo(seconds, true)
-      playerRef.current.playVideo()
+      playerRef.current.seekTo(seconds, true);
+      // Crucial: ensure the video keeps playing after the jump
+      if (playerRef.current.getPlayerState() !== 1) {
+        playerRef.current.playVideo();
+      }
     }
   }
 
-  function goToMoment(index) {
-    if (index < 0 || index >= moments.length) return
-    setActiveIndex(index)
-    seekTo(moments[index].timestamp_display)
+  function handleTranscriptClick(timestamp_display) {
+    seekTo(timestamp_display)
   }
 
-  const activeMoment = activeIndex !== null ? moments[activeIndex] : null
+
+  // const activeMoment = activeIndex !== null ? moments[activeIndex] : null
+
+  // const activeMoment = moments.find((m, i) => {
+  //   const next = moments[i + 1];
+  //   return currentTime >= m.start && (!next || currentTime < next.start);
+  // });
+
+  const activeMoment = moments.find((m, i) => {
+    const nextMoment = moments[i + 1];
+    const startSec = m.start !== undefined ? Number(m.start) : parseTimestamp(m.timestamp_display);
+    const nextStartSec = nextMoment
+      ? (nextMoment.start !== undefined ? Number(nextMoment.start) : parseTimestamp(nextMoment.timestamp_display))
+      : videoInfo?.duration || 999999;
+
+    return currentTime >= startSec && currentTime < nextStartSec;
+  });
+
+  const handleNext = () => {
+    const next = moments.find(m => {
+      const s = m.start !== undefined ? Number(m.start) : parseTimestamp(m.timestamp_display);
+      return s > currentTime + 0.5;
+    });
+    if (next) seekTo(next.timestamp_display);
+  };
+
+  const handleLast = () => {
+    const prev = [...moments].reverse().find(m => {
+      const s = m.start !== undefined ? Number(m.start) : parseTimestamp(m.timestamp_display);
+      return s < currentTime - 2;
+    });
+    if (prev) seekTo(prev.timestamp_display);
+  };
+
+  // 4. Loop Engine
+  useEffect(() => {
+    if (isLooping && activeMoment && playerRef.current) {
+      // 1. Get the index of what's playing now
+      const currentIndex = moments.findIndex(m => m.timestamp_display === activeMoment.timestamp_display);
+
+      // 2. Identify the "Tripwire" (the very next moment)
+      const nextMoment = moments[currentIndex + 1];
+
+      if (nextMoment) {
+        const nextStart = nextMoment.start !== undefined ? nextMoment.start : parseTimestamp(nextMoment.timestamp_display);
+
+        // 3. If we hit or pass the next moment's start, jump back
+        // We use >= instead of == because the player might jump from 10.1 to 10.3 seconds
+        if (currentTime >= nextStart - 0.2) {
+          const currentStart = activeMoment.start !== undefined ? activeMoment.start : parseTimestamp(activeMoment.timestamp_display);
+          playerRef.current.seekTo(currentStart, true);
+        }
+      } else if (videoInfo?.duration && currentTime >= videoInfo.duration - 0.5) {
+        // 4. Special case: If it's the last moment, loop back when video ends
+        const currentStart = activeMoment.start !== undefined ? activeMoment.start : parseTimestamp(activeMoment.timestamp_display);
+        playerRef.current.seekTo(currentStart, true);
+      }
+    }
+  }, [currentTime, isLooping, activeMoment, moments, videoInfo]);
 
   return (
     <div style={s.root}>
@@ -118,8 +206,8 @@ export default function VideoPage() {
       <header style={s.header}>
         <div style={s.wordmark}>CUE</div>
         <div className="flex items-center gap-4">
-          <button style={s.newVideoBtn} onClick={() => navigate("/")}>
-            ← NEW VIDEO
+          <button style={s.newVideoBtn} onClick={() => navigate("/")} className="active:scale-95">
+            New Video
           </button>
         </div>
       </header>
@@ -158,11 +246,49 @@ export default function VideoPage() {
             </div>
           </div>
           <div style={s.metaRight}>
-             {activeMoment && (
-              <motion.div key={activeIndex} initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={s.activeChip}>
-                <span style={{ color: "#869489", fontSize: "10px", letterSpacing: "0.2em", fontWeight: "800" }}>CURRENT CUE</span>
+            {activeMoment ? (
+              <motion.div
+                key={activeMoment.timestamp_display}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                style={s.activeChip}
+              >
+                <span style={{ color: "#869489", fontSize: "10px", letterSpacing: "0.2em", fontWeight: "800" }}>
+                  CURRENT CUE
+                </span>
                 <span style={s.activeChipTime}>{activeMoment.timestamp_display}</span>
+
+                <div style={s.controlsRow}>
+                  {/* LAST */}
+                  <button onClick={handleLast} style={s.iconBtn} title="Last Moment">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M19 20L9 12l10-8v16zM5 19V5" />
+                    </svg>
+                  </button>
+
+                  {/* LOOP */}
+                  <button
+                    onClick={() => setIsLooping(!isLooping)}
+                    style={{ ...s.iconBtn, color: isLooping ? "#869489" : "#ffffff", borderColor: isLooping ? "#869489" : "#1c1c1c" }}
+                    title="Loop Current"
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M17 2l4 4-4 4" /><path d="M3 11v-1a4 4 0 014-4h14" /><path d="M7 22l-4-4 4-4" /><path d="M21 13v1a4 4 0 01-4 4H3" />
+                    </svg>
+                  </button>
+
+                  {/* NEXT */}
+                  <button onClick={handleNext} style={s.iconBtn} title="Next Moment">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M5 4l10 8-10 8V4zM19 5v14" />
+                    </svg>
+                  </button>
+                </div>
               </motion.div>
+            ) : (
+              <div style={{ ...s.activeChip, opacity: 0.3, justifyContent: 'center', alignItems: 'center' }}>
+                <span style={s.metaLabel}>WAITING FOR CUE...</span>
+              </div>
             )}
           </div>
         </section>
@@ -172,34 +298,37 @@ export default function VideoPage() {
           {/* SEGMENTS */}
           <section>
             <h2 style={s.sectionTitle}>
-              <span style={{fontStyle: 'italic', fontWeight: '300'}}>SEGMENTS</span>
+              <span style={{ fontStyle: 'italic', fontWeight: '300' }}>SEGMENTS</span>
               <span style={s.titleLine} />
             </h2>
-            
+
             {phase === "processing" && (
-                <div style={s.pipelineStatus}>
-                    <p style={s.statusMsg}>{status.toUpperCase()}</p>
-                    <div style={s.progressRow}>
-                        {STEPS.slice(0, 4).map((step, i) => (
-                            <div key={step} style={{
-                                ...s.progressDot,
-                                background: i <= stepIndex ? "#869489" : "#1c1c1c",
-                                boxShadow: i === stepIndex ? "0 0 10px rgba(134, 148, 137, 0.5)" : "none"
-                            }} />
-                        ))}
-                    </div>
+              <div style={s.pipelineStatus}>
+                <p style={s.statusMsg}>{status.toUpperCase()}</p>
+                <div style={s.progressRow}>
+                  {STEPS.slice(0, 4).map((step, i) => (
+                    <div key={step} style={{
+                      ...s.progressDot,
+                      background: i <= stepIndex ? "#869489" : "#1c1c1c",
+                      boxShadow: i === stepIndex ? "0 0 10px rgba(134, 148, 137, 0.5)" : "none"
+                    }} />
+                  ))}
                 </div>
+              </div>
             )}
 
-            <div style={s.segmentsList} className="custom-scrollbar">
+            <div style={s.segmentsList} ref={segmentsContainerRef} className="custom-scrollbar">
               {moments.map((m, i) => {
-                const isActive = activeIndex === i;
+                // const isActive = activeIndex === i;
+                const nextMoment = moments[i + 1]
+                const isActive = currentTime >= m.start && (!nextMoment || currentTime < nextMoment.start);
+                // const isActive = currentTime >= m.start && currentTime < m.end
                 return (
-                  <div 
-                    key={i} 
+                  <div
+                    key={i}
                     ref={isActive ? activeCardRef : null} // FIXED: Attached ref[cite: 5]
-                    style={{...s.segmentCard, borderLeft: isActive ? "4px solid #869489" : "4px solid transparent"}}
-                    onClick={() => goToMoment(i)}
+                    style={{ ...s.segmentCard, borderLeft: isActive ? "4px solid #869489" : "4px solid transparent" }}
+                    onClick={() => seekTo(m.timestamp_display)}
                   >
                     <span style={s.segmentTime}>{m.timestamp_display}</span>
                     <p style={s.segmentText}>{m.text}</p>
@@ -212,27 +341,28 @@ export default function VideoPage() {
           {/* TRANSCRIPT */}
           <section>
             <h2 style={s.sectionTitle}>
-              <span style={{fontStyle: 'italic', fontWeight: '300'}}>TRANSCRIPT</span>
+              <span style={{ fontStyle: 'italic', fontWeight: '300' }}>TRANSCRIPT</span>
               <span style={s.titleLine} />
             </h2>
-            <div style={s.transcriptBox} className="custom-scrollbar">
-                {moments.map((m, i) => {
-                    const isActive = activeIndex === i;
-                    return (
-                        <p 
-                          key={i} 
-                          ref={isActive ? activeTranscriptRef : null} // FIXED: Attached ref[cite: 5]
-                          onClick={() => goToMoment(i)} 
-                          style={{
-                            ...s.transcriptLine,
-                            color: isActive ? "#ffffff" : "#8A8E8C",
-                            borderLeft: isActive ? "2px solid #869489" : "2px solid transparent"
-                        }}>
-                            <span style={s.transcriptTime}>{m.timestamp_display}</span>
-                            {m.text}
-                        </p>
-                    );
-                })}
+            <div style={s.transcriptBox} ref={transcriptContainerRef} className="custom-scrollbar">
+              {videoInfo?.transcript?.map((line, i) => {
+                // const isActive = activeIndex === i;
+                const isActive = currentTime >= line.start && currentTime < line.end
+                return (
+                  <p
+                    key={i}
+                    ref={isActive ? activeTranscriptRef : null} // FIXED: Attached ref[cite: 5]
+                    onClick={() => handleTranscriptClick(line.timestamp_display)}
+                    style={{
+                      ...s.transcriptLine,
+                      color: isActive ? "#ffffff" : "#8A8E8C",
+                      borderLeft: isActive ? "2px solid #869489" : "2px solid transparent"
+                    }}>
+                    <span style={s.transcriptTime}>{line.timestamp_display}</span>
+                    {line.text}
+                  </p>
+                );
+              })}
             </div>
           </section>
         </div>
@@ -266,13 +396,24 @@ const s = {
     letterSpacing: "0.05em",
   },
   newVideoBtn: {
-    background: "transparent",
-    border: "1px solid #2b2b2b",
-    color: "#869489", // Sage green[cite: 1]
-    padding: "8px 16px",
-    fontSize: "11px",
-    fontWeight: "800",
+    // Layout & Position
+    backgroundColor: "#869489", // bg-primary (Sage Green)
+    color: "#0e1f17",           // text-on-primary
+    padding: "8px 20px",        // px-6 py-2
+    borderRadius: "8px",        // rounded-lg
+    fontWeight: "700",          // font-bold
+    fontSize: "14px",           // text-sm
+
+    // Effects
+    boxShadow: "0 10px 15px -3px rgba(0, 0, 0, 0.3)", // shadow-lg
+    transition: "transform 0.2s ease",                // transition-transform
+    border: "none",
     cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    // textTransform: "uppercase",
+    // letterSpacing: "0.05em",
   },
   main: {
     paddingTop: "128px", // Matched hero spacing from Landing Page[cite: 3, 4]
@@ -309,6 +450,27 @@ const s = {
     lineHeight: "1.1",
     color: "#ffffff",
     marginBottom: "24px",
+  },
+  controlsRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    marginTop: "16px",
+    paddingTop: "16px",
+    borderTop: "1px solid #1c1c1c",
+    gap: "8px"
+  },
+  iconBtn: {
+    background: "#0a0a0a",
+    border: "1px solid #1c1c1c",
+    borderRadius: "6px",
+    color: "#ffffff",
+    padding: "10px",
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    transition: "all 0.2s ease",
+    flex: 1,
   },
   metaRow: {
     display: "flex",

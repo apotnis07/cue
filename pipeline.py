@@ -142,12 +142,21 @@ class CuePipeline(FlowSpec):
     @step
     def end(self):
         """Summarize and save results"""
+        self.transcript = []
+        for segment in self.segments:
+            self.transcript.append({
+                "start": segment["start"],
+                "end": segment["end"],
+                "text": segment["text"],
+                "timestamp_display": self._format_timestamp(segment["start"]),
+            })
         results = {
             "url": self.video_url,
             "title": self.video_title,
             "duration": self.video_duration,
             "moments": self.moments,
             "total_moments": len(self.moments),
+            "transcript": self.transcript,
         }
 
         output_path = f"results_{self.run_id}.json"
@@ -163,7 +172,7 @@ class CuePipeline(FlowSpec):
 
         for m in self.moments:
             types = ", ".join(m["types"])
-            print(f"[{m['timestamp_display']}] ({types})  {m['text']}")
+            print(f"[{m['timestamp_display']}] ({types})  {m['text']}", flush=True)
 
     def _format_timestamp(self, seconds: float) -> str:
         mins = int(seconds // 60)

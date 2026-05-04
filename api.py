@@ -26,7 +26,7 @@ async def process_video(url: str):
             }
 
             process = await asyncio.create_subprocess_exec(
-                sys.executable, "pipeline.py", "run",
+                sys.executable, "-u", "pipeline.py", "run",
                 "--video_url", url,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
@@ -108,6 +108,7 @@ async def process_video(url: str):
                             "title": results["title"],
                             "duration": results["duration"],
                             "total_moments": results["total_moments"],
+                            "transcript": results["transcript"]
                         })
                     }
             else:
