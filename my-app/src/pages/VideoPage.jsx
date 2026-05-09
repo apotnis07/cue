@@ -298,7 +298,7 @@ export default function VideoPage() {
           {/* SEGMENTS */}
           <section>
             <h2 style={s.sectionTitle}>
-              <span style={{ fontStyle: 'italic', fontWeight: '300' }}>SEGMENTS</span>
+              <span style={{ fontStyle: 'italic', fontWeight: '300' }}>MOMENTS</span>
               <span style={s.titleLine} />
             </h2>
 
