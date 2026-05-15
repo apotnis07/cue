@@ -6,7 +6,6 @@ import re
 from pathlib import Path
 import mlx_whisper
 import time
-from sentence_transformers import SentenceTransformer, util
 
 
 class CuePipeline(FlowSpec):
@@ -20,11 +19,8 @@ class CuePipeline(FlowSpec):
     def start(self):
         """Validate input and set up working directory"""
         self.run_id = str(int(time.time()))
-        # self.video_path = f"video_{self.run_id}.mp4"
-        # self.audio_path = f"audio_{self.run_id}.wav"
-
-        self.video_path = f"video.mp4"
-        self.audio_path = f"audio.wav"
+        self.video_path = f"video_{self.run_id}.mp4"
+        self.audio_path = f"audio_{self.run_id}.wav"
 
         print(f"Starting pipeline for: {self.video_url}")
         print(f"Run ID: {self.run_id}")
@@ -44,8 +40,6 @@ class CuePipeline(FlowSpec):
             self.video_duration = info.get("duration", 0)
 
         print(f"Downloaded: {self.video_title} ({self.video_duration}s)")
-        # self.video_title = "Test Video"
-        # self.video_duration = 0
         self.next(self.extract_audio)
 
     @step
@@ -84,72 +78,62 @@ class CuePipeline(FlowSpec):
 
     @step
     def detect_moments(self):
-        """Detect key moments using semantic similarity"""
-        model = SentenceTransformer("all-MiniLM-L6-v2", device="mps")
+        """Detect key moments from transcript"""
+        INGREDIENT_PATTERNS = [
+            r"i'?m adding", r"we'?re adding", r"adding in",
+            r"add(ing)? (in |the |your )?",
+            r"pour(ing)? (in|over|into)",
+            r"sprinkle", r"dash of", r"garnish (with)?",
+            r"top(ping|ped) with",
+            r"throw(ing)? in", r"toss(ing)? in",
+            r"it'?s time for",
+            r"now (we'?re|i'?m) (adding|pouring|throwing|putting)",
+        ]
+        MEASUREMENT_PATTERNS = [
+            r"\d+\s*(grams?|g\b|cups?|tablespoons?|tbsp|teaspoons?|tsp|ounces?|oz|pounds?|lb|ml|liters?)",
+            r"(a |one |two |three |four )?(pinch|dash|handful|splash|drizzle) of",
+            r"(quarter|half|third) (cup|teaspoon|tablespoon)",
+        ]
+        TECHNIQUE_PATTERNS = [
+            r"(turn|reduce|increase|set|keep).{0,15}(heat|temperature|oven|stove)",
+            r"(bake|cook|fry|simmer|boil|roast|grill|steam).{0,10}for.{0,10}(minute|hour|second)",
+            r"(fold|mix|stir|whisk|beat|blend).{0,15}(until|gently|carefully|slowly)",
+            r"(until|once|when).{0,20}(golden|brown|soft|thick|set|bubble|boil|done|ready)",
+            r"(remove|take).{0,10}(from|off).{0,10}(heat|oven|pan|stove)",
+            r"(let|allow).{0,10}(rest|cool|sit|chill|set)",
+        ]
+        TIMING_PATTERNS = [
+            r"\d+\s*to\s*\d+\s*(minutes?|hours?|seconds?)",
+            r"(for\s*)?\d+\s*(minutes?|hours?|seconds?)",
+            r"\d+\s*(degrees?|fahrenheit|celsius|°F|°C)",
+            r"(medium|low|high|medium.low|medium.high)\s*heat",
+        ]
 
-        ANCHORS = {
-        "ingredient": [
-            "I am adding an ingredient right now",
-            "pouring this into the pan now",
-            "putting this ingredient into the bowl",
-            "I'm mixing in this ingredient",
-            "adding this to the recipe now",
-            "use exactly this amount of ingredient",
-            "measure out this quantity right now",
-            "you need this many grams or cups",
-        ],
-        "technique": [
-            "do this specific action right now",
-            "perform this step at this moment",
-            "this is how you do this technique",
-            "apply this method right now",
-        ],
-        "timing": [
-            "cook this for exactly this many minutes",
-            "set the temperature to this number",
-            "wait this long before the next step",
-            "it is ready when this happens",
-        ],
+        pattern_groups = {
+            "ingredient": re.compile("|".join(INGREDIENT_PATTERNS), re.IGNORECASE),
+            "measurement": re.compile("|".join(MEASUREMENT_PATTERNS), re.IGNORECASE),
+            "technique": re.compile("|".join(TECHNIQUE_PATTERNS), re.IGNORECASE),
+            "timing": re.compile("|".join(TIMING_PATTERNS), re.IGNORECASE),
         }
-
-        print("Encoding anchors...")
-        anchor_embeddings = {
-            category: model.encode(anchors, convert_to_tensor=True)
-            for category, anchors in ANCHORS.items()
-        }
-
-        print(f"Encoding {len(self.segments)} segments...")
-        texts = [seg["text"] for seg in self.segments]
-        segment_embeddings = model.encode(texts, convert_to_tensor=True, batch_size=64)
-
-        THRESHOLD = 0.35
 
         moments = []
-        ACTION_INDICATORS = re.compile(
-    r"\b(i'?m|i am|we'?re|we are|i'?ll|let'?s|go ahead|now|we'?re gonna|i'?m gonna|going to|adding|pour|sprinkle|mix|fold|bake|cook|stir|whisk|reduce|set|turn)\b",
-    re.IGNORECASE
-)
-        for seg, seg_emg in zip(self.segments, segment_embeddings):
+        for segment in self.segments:
+            text = segment["text"]
 
-            if len(seg["text"].split()) < 6:
-                continue
             matched_types = []
-            for category, cat_embeddings in anchor_embeddings.items():
-                scores = util.cos_sim(seg_emg, cat_embeddings)[0]
-                max_score = float(scores.max())
-                if max_score >= THRESHOLD:
+
+            for category, pattern in pattern_groups.items():
+                if pattern.search(text):
                     matched_types.append(category)
 
             if matched_types:
-                if ACTION_INDICATORS.search(seg["text"]):
-                    moments.append({
-                        "start": seg["start"],
-                        "end": seg["end"],
-                        "text": seg["text"],
-                        "timestamp_display": self._format_timestamp(seg["start"]),
-                        "types": matched_types,
-                    })
-
+                moments.append({
+                    "start": segment["start"],
+                    "end": segment["end"],
+                    "text": text,
+                    "timestamp_display": self._format_timestamp(segment["start"]),
+                    "types": matched_types
+                })
 
         self.moments = self._deduplicate(moments, min_gap=4.0)
         print(f"Detected {len(self.moments)} moments")
