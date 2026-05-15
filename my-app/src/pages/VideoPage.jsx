@@ -41,7 +41,7 @@ export default function VideoPage() {
   const activeCardRef = useRef(null)
   const activeTranscriptRef = useRef(null)
 
-  const STEPS = ["download", "extract_audio", "transcribe", "detect_moments", "end"]
+  const STEPS = ["download", "extract_audio", "extract_frames", "transcribe", "detect_moments", "end"]
   const stepIndex = STEPS.indexOf(currentStep)
 
   useEffect(() => {

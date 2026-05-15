@@ -2,11 +2,9 @@ from metaflow import FlowSpec, step, Parameter
 import yt_dlp
 import subprocess
 import json
-import re
 from pathlib import Path
 import mlx_whisper
 import time
-from sentence_transformers import SentenceTransformer, util
 
 
 class CuePipeline(FlowSpec):
@@ -37,6 +35,8 @@ class CuePipeline(FlowSpec):
         ydl_opts = {
             "format": "best[ext=mp4]",
             "outtmpl": self.video_path,
+            "noplaylist": True,
+            "overwrites": True,
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(self.video_url, download=True)
@@ -61,6 +61,87 @@ class CuePipeline(FlowSpec):
             self.audio_path
         ], check=True, capture_output=True)
         print(f"Audio extracted to {self.audio_path}")
+        self.next(self.extract_frames)
+
+    @step
+    def extract_frames(self):
+        """Extract frames at 1fps and score visual activity with CLIP"""
+        import os
+        import shutil
+        import torch
+        from PIL import Image
+        from transformers import CLIPProcessor, CLIPModel
+
+        frames_dir = "frames"
+        shutil.rmtree(frames_dir, ignore_errors=True)
+        os.makedirs(frames_dir)
+
+        subprocess.run([
+            "ffmpeg", "-y", "-i", self.video_path,
+            "-vf", "fps=1", "-q:v", "2",
+            f"{frames_dir}/frame_%06d.jpg"
+        ], check=True, capture_output=True)
+
+        frame_files = sorted(os.listdir(frames_dir))
+        print(f"Extracted {len(frame_files)} frames, scoring with CLIP...")
+
+        device = "mps" if torch.backends.mps.is_available() else "cpu"
+        clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
+        clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+        clip_model.eval()
+
+        positive_prompts = [
+            "hands actively demonstrating a technique",
+            "person performing a physical action",
+            "close-up of hands doing something",
+            "active demonstration in progress",
+            "showing how to do something with hands",
+        ]
+        negative_prompts = [
+            "person talking to camera",
+            "presenter speaking without demonstrating",
+            "talking head with no action",
+        ]
+        all_prompts = positive_prompts + negative_prompts
+        n_pos = len(positive_prompts)
+
+        import torch.nn.functional as F
+
+        text_inputs = clip_processor(text=all_prompts, return_tensors="pt", padding=True)
+        text_inputs = {k: v.to(device) for k, v in text_inputs.items()}
+        with torch.no_grad():
+            text_out = clip_model.text_model(**text_inputs)
+            text_features = clip_model.text_projection(text_out.pooler_output)
+            text_features = F.normalize(text_features, dim=-1)
+
+        BATCH = 32
+        visual_scores = {}
+        logit_scale = clip_model.logit_scale.exp()
+
+        with torch.no_grad():
+            for b in range(0, len(frame_files), BATCH):
+                batch_fnames = frame_files[b:b + BATCH]
+                batch_imgs = [
+                    Image.open(os.path.join(frames_dir, f)).convert("RGB")
+                    for f in batch_fnames
+                ]
+                img_inputs = clip_processor(images=batch_imgs, return_tensors="pt")
+                img_inputs = {k: v.to(device) for k, v in img_inputs.items()}
+
+                img_out = clip_model.vision_model(**img_inputs)
+                image_features = clip_model.visual_projection(img_out.pooler_output)
+                image_features = F.normalize(image_features, dim=-1)
+
+                sim = (image_features @ text_features.T) * logit_scale
+                probs = sim.softmax(dim=1)
+                pos_scores = probs[:, :n_pos].sum(dim=1).cpu().tolist()
+
+                for i, score in enumerate(pos_scores):
+                    visual_scores[float(b + i)] = score
+
+        shutil.rmtree(frames_dir)
+        self.visual_scores = visual_scores
+        print(f"Visual scores computed for {len(visual_scores)} frames")
         self.next(self.transcribe)
 
     @step 
@@ -84,74 +165,76 @@ class CuePipeline(FlowSpec):
 
     @step
     def detect_moments(self):
-        """Detect key moments using semantic similarity"""
+        """Detect key moments using universal semantic anchors + CLIP visual validation"""
+        from sentence_transformers import SentenceTransformer, util
+
         model = SentenceTransformer("all-MiniLM-L6-v2", device="mps")
 
-        ANCHORS = {
-        "ingredient": [
-            "I am adding an ingredient right now",
-            "pouring this into the pan now",
-            "putting this ingredient into the bowl",
-            "I'm mixing in this ingredient",
-            "adding this to the recipe now",
-            "use exactly this amount of ingredient",
-            "measure out this quantity right now",
-            "you need this many grams or cups",
-        ],
-        "technique": [
-            "do this specific action right now",
-            "perform this step at this moment",
-            "this is how you do this technique",
-            "apply this method right now",
-        ],
-        "timing": [
-            "cook this for exactly this many minutes",
-            "set the temperature to this number",
-            "wait this long before the next step",
-            "it is ready when this happens",
-        ],
-        }
+        ANCHORS = [
+            # Tutorial-framing register
+            "Now I am going to show you how to do this",
+            "Watch as I demonstrate this step right here",
+            "This is the technique you need to apply",
+            "Pay close attention to what I am doing now",
+            "Here is the next step in the process",
+            "Let me demonstrate this important action",
+            "This is how you perform this correctly",
+            "Follow along carefully as I do this",
+            "This is the key action at this moment",
+            "Now we move on to this step",
+            "I will now perform this action",
+            "Here is what you need to do at this point",
+            # Direct-action register
+            "I am doing this action right now",
+            "I am placing this here right now",
+            "I am applying this step directly now",
+            "putting this in right now",
+            "I am performing this step right now",
+            "I am pressing here at this moment",
+            "doing this specific thing at this moment",
+            "this is going in right now",
+        ]
 
         print("Encoding anchors...")
-        anchor_embeddings = {
-            category: model.encode(anchors, convert_to_tensor=True)
-            for category, anchors in ANCHORS.items()
-        }
+        anchor_embeddings = model.encode(ANCHORS, convert_to_tensor=True)
 
         print(f"Encoding {len(self.segments)} segments...")
         texts = [seg["text"] for seg in self.segments]
         segment_embeddings = model.encode(texts, convert_to_tensor=True, batch_size=64)
 
-        THRESHOLD = 0.35
+        AUDIO_THRESHOLD = 0.30
+        AUDIO_STRONG = 0.50
+        VISUAL_THRESHOLD = 0.25
 
         moments = []
-        ACTION_INDICATORS = re.compile(
-    r"\b(i'?m|i am|we'?re|we are|i'?ll|let'?s|go ahead|now|we'?re gonna|i'?m gonna|going to|adding|pour|sprinkle|mix|fold|bake|cook|stir|whisk|reduce|set|turn)\b",
-    re.IGNORECASE
-)
-        for seg, seg_emg in zip(self.segments, segment_embeddings):
-
+        for seg, seg_emb in zip(self.segments, segment_embeddings):
             if len(seg["text"].split()) < 6:
                 continue
-            matched_types = []
-            for category, cat_embeddings in anchor_embeddings.items():
-                scores = util.cos_sim(seg_emg, cat_embeddings)[0]
-                max_score = float(scores.max())
-                if max_score >= THRESHOLD:
-                    matched_types.append(category)
 
-            if matched_types:
-                if ACTION_INDICATORS.search(seg["text"]):
-                    moments.append({
-                        "start": seg["start"],
-                        "end": seg["end"],
-                        "text": seg["text"],
-                        "timestamp_display": self._format_timestamp(seg["start"]),
-                        "types": matched_types,
-                    })
+            scores = util.cos_sim(seg_emb, anchor_embeddings)[0]
+            audio_score = float(scores.max())
 
+            if audio_score < AUDIO_THRESHOLD:
+                continue
 
-        self.moments = self._deduplicate(moments, min_gap=4.0)
+            t = seg["start"]
+            window_visual = max(
+                (self.visual_scores.get(float(ts), 0.0)
+                 for ts in range(max(0, int(t) - 3), int(t) + 4)),
+                default=0.0
+            )
+
+            if audio_score >= AUDIO_STRONG or window_visual >= VISUAL_THRESHOLD:
+                moments.append({
+                    "start": seg["start"],
+                    "end": seg["end"],
+                    "text": seg["text"],
+                    "timestamp_display": self._format_timestamp(seg["start"]),
+                    "_score": audio_score,
+                    "_emb": seg_emb.cpu().numpy(),
+                })
+
+        self.moments = self._deduplicate_content_aware(moments)
         print(f"Detected {len(self.moments)} moments")
         self.next(self.end)
 
@@ -187,21 +270,37 @@ class CuePipeline(FlowSpec):
         print(f"{'='*60}\n")
 
         for m in self.moments:
-            types = ", ".join(m["types"])
-            print(f"[{m['timestamp_display']}] ({types})  {m['text']}", flush=True)
+            print(f"[{m['timestamp_display']}]  {m['text']}", flush=True)
 
     def _format_timestamp(self, seconds: float) -> str:
         mins = int(seconds // 60)
         secs = int(seconds % 60)
         return f"{mins}:{secs:02d}"
 
-    def _deduplicate(self, moments: list, min_gap: float) -> list:
+    def _deduplicate_content_aware(self, moments: list, min_gap: float = 2.0, sim_threshold: float = 0.85) -> list:
+        import torch
+        from sentence_transformers import util as st_util
         if not moments:
             return []
         deduped = [moments[0]]
-        for m in moments[1:]:
-            if m["start"] - deduped[-1]["start"] >= min_gap:
-                deduped.append(m)
+        for new in moments[1:]:
+            conflict_idx = None
+            for j, kept in enumerate(deduped):
+                if abs(new["start"] - kept["start"]) < min_gap:
+                    sim = float(st_util.cos_sim(
+                        torch.tensor(new["_emb"]),
+                        torch.tensor(kept["_emb"])
+                    )[0][0])
+                    if sim > sim_threshold:
+                        conflict_idx = j
+                        break
+            if conflict_idx is None:
+                deduped.append(new)
+            elif new["_score"] > deduped[conflict_idx]["_score"]:
+                deduped[conflict_idx] = new
+        for m in deduped:
+            m.pop("_score", None)
+            m.pop("_emb", None)
         return deduped
 
 if __name__ == "__main__":

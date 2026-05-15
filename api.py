@@ -35,10 +35,11 @@ async def process_video(url: str):
             current_step = None
             results_file = None
 
-            step_order = ["start", "download", "extract_audio", "transcribe", "detect_moments", "end"]
+            step_order = ["start", "download", "extract_audio", "extract_frames", "transcribe", "detect_moments", "end"]
             step_messages = {
                 "download": "Downloading video...",
                 "extract_audio": "Extracting audio...",
+                "extract_frames": "Analyzing video frames...",
                 "transcribe": "Transcribing: this takes about a minute...",
                 "detect_moments": "Detecting moments...",
                 "end": "Finalizing results...",
@@ -76,19 +77,11 @@ async def process_video(url: str):
                     try:
                         bracket_end = actual_message.index("]")
                         timestamp_display = actual_message[1:bracket_end]
-
-                        paren_start = actual_message.index("(")
-                        paren_end = actual_message.index(")")
-                        types_str = actual_message[paren_start + 1:paren_end]
-                        types = [t.strip() for t in types_str.split(",")]
-
-                        text = actual_message[paren_end + 2:].strip()
-
+                        text = actual_message[bracket_end + 1:].strip()
                         yield {
                             "event": "moment",
                             "data": json.dumps({
                                 "timestamp_display": timestamp_display,
-                                "types": types,
                                 "text": text,
                             })
                         }

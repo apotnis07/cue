@@ -9,8 +9,10 @@ dependencies = [
     "faster-whisper>=1.2.1",
     "metaflow[ui]>=2.19.23",
     "mlx-whisper>=0.4.3",
+    "Pillow>=10.0.0",
     "sentence-transformers>=5.4.1",
     "sse-starlette>=3.4.1",
+    "transformers>=4.40.0",
     "uvicorn>=0.46.0",
     "yt-dlp>=2026.3.17",
 ]
