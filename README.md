@@ -6,7 +6,9 @@ CUE indexes cooking videos for key instructional moments. Paste a YouTube URL an
 <img width="1512" height="860" alt="Screenshot 2026-05-17 at 9 51 35 PM" src="https://github.com/user-attachments/assets/332bfbca-7ec9-4933-9567-1f1c373f4ea4" />
 
 ### Video Player
-
+<div align="left">
+  <img src="./assets/videoPlayer.gif" width="100%" alt="Video">
+</div>
 
 ## How it works
 
