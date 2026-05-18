@@ -1,0 +1,10 @@
+{
+    "video_url": "https://www.youtube.com/watch?v=Se__aa_k-ms",
+    "video_title": "The Secret for FAST Chord Changes",
+    "ground_truth": [
+      {"timestamp_display": "0:56", "label": "Lets have a look a close up look for change between a and d chord"},
+      {"timestamp_display": "1:04", "label": "Lets start with the d chord"},
+      {"timestamp_display": "1:44", "label": "Now move to the a chord"},
+      {"timestamp_display": "1:04", "label": "Lets start with the d chord"}
+    ]
+  }
