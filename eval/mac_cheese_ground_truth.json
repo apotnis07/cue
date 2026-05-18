@@ -1,0 +1,24 @@
+{
+  "video_url": "https://www.youtube.com/watch?v=NviTKRY3DtQ",
+  "video_title": "THE BEST MAC & CHEESE RECIPE EVER",
+  "ground_truth": [
+    {"timestamp_display": "1:18", "label": "salt pasta water, get it boiling", "types": ["ingredient", "technique"]},
+    {"timestamp_display": "1:29", "label": "dice butter, measure out milk", "types": ["technique"]},
+    {"timestamp_display": "1:33", "label": "warm milk in saucepan on low heat", "types": ["technique"]},
+    {"timestamp_display": "1:44", "label": "grate cheese", "types": ["technique"]},
+    {"timestamp_display": "2:09", "label": "butter into saucepan on low heat", "types": ["ingredient"]},
+    {"timestamp_display": "2:16", "label": "add flour to butter to make roux", "types": ["ingredient", "technique"]},
+    {"timestamp_display": "2:22", "label": "add warm milk to roux one ladle at a time", "types": ["ingredient", "technique"]},
+    {"timestamp_display": "3:18", "label": "last of the milk added", "types": ["ingredient"]},
+    {"timestamp_display": "3:29", "label": "drain pasta, run cold water over it", "types": ["technique"]},
+    {"timestamp_display": "3:54", "label": "whisk first batch of cheese into sauce in two stages", "types": ["ingredient", "technique"]},
+    {"timestamp_display": "4:06", "label": "add second batch of cheese", "types": ["ingredient"]},
+    {"timestamp_display": "4:28", "label": "season with salt", "types": ["ingredient"]},
+    {"timestamp_display": "4:32", "label": "season with black pepper", "types": ["ingredient"]},
+    {"timestamp_display": "4:37", "label": "add smoked paprika", "types": ["ingredient"]},
+    {"timestamp_display": "4:51", "label": "combine macaroni and cheese sauce in pot", "types": ["ingredient", "technique"]},
+    {"timestamp_display": "5:17", "label": "sprinkle reserved cheese over top", "types": ["ingredient"]},
+    {"timestamp_display": "5:26", "label": "add panko breadcrumbs on top", "types": ["ingredient"]},
+    {"timestamp_display": "5:34", "label": "bake at 180C for 25-30 minutes", "types": ["timing"]}
+  ]
+}

@@ -91,16 +91,17 @@ class CuePipeline(FlowSpec):
         clip_model.eval()
 
         positive_prompts = [
-            "hands actively demonstrating a technique",
-            "person performing a physical action",
-            "close-up of hands doing something",
-            "active demonstration in progress",
-            "showing how to do something with hands",
+            "hands adding an ingredient to a bowl or pan",
+            "person measuring or pouring a cooking ingredient",
+            "hands chopping, slicing, or dicing food",
+            "close-up of a specific cooking action happening now",
+            "active food preparation step in progress",
         ]
         negative_prompts = [
-            "person talking to camera",
-            "presenter speaking without demonstrating",
-            "talking head with no action",
+            "chef talking about the recipe without touching food",
+            "overview shot of the kitchen or finished dish",
+            "food resting or cooking unattended",
+            "presenter speaking to camera",
         ]
         all_prompts = positive_prompts + negative_prompts
         n_pos = len(positive_prompts)
@@ -165,77 +166,113 @@ class CuePipeline(FlowSpec):
 
     @step
     def detect_moments(self):
-        """Detect key moments using universal semantic anchors + CLIP visual validation"""
+        """Detect key cooking moments using category anchors + regex gate + CLIP visual validation"""
+        import re
         from sentence_transformers import SentenceTransformer, util
 
         model = SentenceTransformer("all-MiniLM-L6-v2", device="mps")
 
-        ANCHORS = [
-            # Tutorial-framing register
-            "Now I am going to show you how to do this",
-            "Watch as I demonstrate this step right here",
-            "This is the technique you need to apply",
-            "Pay close attention to what I am doing now",
-            "Here is the next step in the process",
-            "Let me demonstrate this important action",
-            "This is how you perform this correctly",
-            "Follow along carefully as I do this",
-            "This is the key action at this moment",
-            "Now we move on to this step",
-            "I will now perform this action",
-            "Here is what you need to do at this point",
-            # Direct-action register
-            "I am doing this action right now",
-            "I am placing this here right now",
-            "I am applying this step directly now",
-            "putting this in right now",
-            "I am performing this step right now",
-            "I am pressing here at this moment",
-            "doing this specific thing at this moment",
-            "this is going in right now",
-        ]
+        ANCHORS = {
+        "ingredient": [
+            "I am adding an ingredient right now",
+            "pouring this into the pan now",
+            "putting this ingredient into the bowl",
+            "I'm mixing in this ingredient",
+            "adding this to the recipe now",
+            "use exactly this amount of ingredient",
+            "measure out this quantity right now",
+            "you need this many grams or cups",
+        ],
+        "technique": [
+            "do this specific action right now",
+            "perform this step at this moment",
+            "this is how you do this technique",
+            "apply this method right now",
+        ],
+        "timing": [
+            "cook this for exactly this many minutes",
+            "set the temperature to this number",
+            "wait this long before the next step",
+            "it is ready when this happens",
+        ],
+        }
+
+
+        ACTION_INDICATORS = re.compile(
+            r"\b(adding|pour(ing)?|sprinkle|mix(ing)?|fold(ing)?|bake|baking|cook(ing)?|stir(ring)?|"
+            r"whisk(ing)?|reduc(e|ing)|combining?|incorporating?|slic(e|ing)|chop(ping)?|dic(e|ing)|"
+            r"mince|grat(e|ing)|knead(ing)?|spread(ing)?|drizzle|season(ing)?|coat(ing)?|"
+            r"brush(ing)?|transfer(ring)?)\b",
+            re.IGNORECASE
+        )
 
         print("Encoding anchors...")
-        anchor_embeddings = model.encode(ANCHORS, convert_to_tensor=True)
+        anchor_embeddings = {
+            category: model.encode(anchors, convert_to_tensor=True)
+            for category, anchors in ANCHORS.items()
+        }
 
         print(f"Encoding {len(self.segments)} segments...")
         texts = [seg["text"] for seg in self.segments]
         segment_embeddings = model.encode(texts, convert_to_tensor=True, batch_size=64)
 
-        AUDIO_THRESHOLD = 0.30
-        AUDIO_STRONG = 0.50
-        VISUAL_THRESHOLD = 0.25
+        THRESHOLD = 0.40
+        VISUAL_PERCENTILE = 0.65  # top 20% most visually active frames
+
+        all_visual_scores = sorted(self.visual_scores.values())
+        cutoff_idx = int(len(all_visual_scores) * VISUAL_PERCENTILE)
+        visual_threshold = all_visual_scores[cutoff_idx] if all_visual_scores else 1.0
+        print(f"Dynamic visual threshold (p{int(VISUAL_PERCENTILE*100)}): {visual_threshold:.3f}")
 
         moments = []
+        count_v = 0
+        count_t = 0
         for seg, seg_emb in zip(self.segments, segment_embeddings):
-            if len(seg["text"].split()) < 6:
+            if len(seg["text"].split()) < 3:
                 continue
 
-            scores = util.cos_sim(seg_emb, anchor_embeddings)[0]
-            audio_score = float(scores.max())
-
-            if audio_score < AUDIO_THRESHOLD:
-                continue
+            matched_types = []
+            best_score = 0.0
+            for category, cat_embeddings in anchor_embeddings.items():
+                scores = util.cos_sim(seg_emb, cat_embeddings)[0]
+                max_score = float(scores.max())
+                if max_score >= THRESHOLD:
+                    matched_types.append(category)
+                    best_score = max(best_score, max_score)
 
             t = seg["start"]
-            window_visual = max(
-                (self.visual_scores.get(float(ts), 0.0)
-                 for ts in range(max(0, int(t) - 3), int(t) + 4)),
-                default=0.0
-            )
+            window_scores = [
+                self.visual_scores.get(float(ts), 0.0)
+                for ts in range(max(0, int(t) - 3), int(t) + 4)
+            ]
+            window_visual = sum(window_scores) / len(window_scores) if window_scores else 0.0
 
-            if audio_score >= AUDIO_STRONG or window_visual >= VISUAL_THRESHOLD:
-                moments.append({
-                    "start": seg["start"],
-                    "end": seg["end"],
-                    "text": seg["text"],
-                    "timestamp_display": self._format_timestamp(seg["start"]),
-                    "_score": audio_score,
-                    "_emb": seg_emb.cpu().numpy(),
-                })
+            text_gate = bool(matched_types and ACTION_INDICATORS.search(seg["text"]))
+            visual_gate = bool(matched_types and window_visual >= visual_threshold)
+
+            if text_gate:
+                count_t += 1
+
+            if visual_gate:
+                count_v += 1
+
+            if not (text_gate or visual_gate):
+                continue
+
+            moments.append({
+                "start": seg["start"],
+                "end": seg["end"],
+                "text": seg["text"],
+                "timestamp_display": self._format_timestamp(seg["start"]),
+                "types": matched_types,
+                "_score": best_score,
+                "_emb": seg_emb.cpu().numpy(),
+            })
 
         self.moments = self._deduplicate_content_aware(moments)
         print(f"Detected {len(self.moments)} moments")
+        print(f"Detected {count_t} text moments and {count_v} visual moments")
+
         self.next(self.end)
 
     @step
@@ -270,7 +307,8 @@ class CuePipeline(FlowSpec):
         print(f"{'='*60}\n")
 
         for m in self.moments:
-            print(f"[{m['timestamp_display']}]  {m['text']}", flush=True)
+            types = ", ".join(m.get("types", []))
+            print(f"[{m['timestamp_display']}] ({types})  {m['text']}", flush=True)
 
     def _format_timestamp(self, seconds: float) -> str:
         mins = int(seconds // 60)

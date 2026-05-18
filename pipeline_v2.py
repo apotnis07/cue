@@ -37,6 +37,8 @@ class CuePipeline(FlowSpec):
         ydl_opts = {
             "format": "best[ext=mp4]",
             "outtmpl": self.video_path,
+            "noplaylist": True,
+            "overwrites": True,
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(self.video_url, download=True)

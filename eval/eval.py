@@ -100,44 +100,52 @@ def find_misses(detected_moments, ground_truth_moments, tolerance=10):
     return misses
 
 if __name__ == "__main__":
-    gt_data = load_ground_truth("eval/cheesecake_ground_truth.json")
+    gt_data = load_ground_truth("eval/mac_cheese_ground_truth.json")
     ground_truth = gt_data["ground_truth"]
     video_url = gt_data["video_url"]
 
     print(f"Evaluating on: {gt_data['video_title']}")
     print(f"Ground truth moments: {len(ground_truth)}")
 
-    # run both pipelines
+    # run all three pipelines
     v1_results_path = run_pipeline("pipeline_v1.py", video_url)
-    v2_results_path = run_pipeline("pipeline.py", video_url)
+    v2_results_path = run_pipeline("pipeline_v2.py", video_url)
+    v3_results_path = run_pipeline("pipeline.py", video_url)
 
-    # score both
+    # score all three
     v1_results = load_results(v1_results_path)
     v2_results = load_results(v2_results_path)
+    v3_results = load_results(v3_results_path)
 
     v1_metrics = evaluate(v1_results["moments"], ground_truth)
     v2_metrics = evaluate(v2_results["moments"], ground_truth)
+    v3_metrics = evaluate(v3_results["moments"], ground_truth)
 
     print_results("V1 — Regex", v1_metrics)
     print_results("V2 — Semantic + Action", v2_metrics)
+    print_results("V3 — Multimodal (Audio + CLIP)", v3_metrics)
 
-    # comparison
+    # comparison: v1 → v2 → v3
     print(f"\n{'='*50}")
-    print("  COMPARISON")
+    print("  COMPARISON (deltas vs V1)")
     print(f"{'='*50}")
-    recall_delta = v2_metrics["recall"] - v1_metrics["recall"]
-    precision_delta = v2_metrics["precision"] - v1_metrics["precision"]
-    f1_delta = v2_metrics["f1"] - v1_metrics["f1"]
-    print(f"  Recall:    {'+' if recall_delta >= 0 else ''}{recall_delta:.1%}")
-    print(f"  Precision: {'+' if precision_delta >= 0 else ''}{precision_delta:.1%}")
-    print(f"  F1:        {'+' if f1_delta >= 0 else ''}{f1_delta:.3f}")
+    for label, metrics in [("V2", v2_metrics), ("V3", v3_metrics)]:
+        recall_delta = metrics["recall"] - v1_metrics["recall"]
+        precision_delta = metrics["precision"] - v1_metrics["precision"]
+        f1_delta = metrics["f1"] - v1_metrics["f1"]
+        print(f"  {label}  Recall: {'+' if recall_delta >= 0 else ''}{recall_delta:.1%}  "
+              f"Precision: {'+' if precision_delta >= 0 else ''}{precision_delta:.1%}  "
+              f"F1: {'+' if f1_delta >= 0 else ''}{f1_delta:.3f}")
 
     v1_misses = find_misses(v1_results["moments"], ground_truth)
     v2_misses = find_misses(v2_results["moments"], ground_truth)
+    v3_misses = find_misses(v3_results["moments"], ground_truth)
 
-    both_miss = [gt for gt in v2_misses 
-                if any(gt["timestamp_display"] == m["timestamp_display"] 
-                        for m in v1_misses)]
+    all_miss = [gt for gt in v3_misses
+                if any(gt["timestamp_display"] == m["timestamp_display"]
+                       for m in v1_misses)
+                and any(gt["timestamp_display"] == m["timestamp_display"]
+                        for m in v2_misses)]
 
     print("\n--- V1 misses ---")
     for m in v1_misses:
@@ -147,6 +155,10 @@ if __name__ == "__main__":
     for m in v2_misses:
         print(f"  [{m['timestamp_display']}] {m['label']}")
 
-    print("\n--- Both miss ---")
-    for m in both_miss:
+    print("\n--- V3 misses ---")
+    for m in v3_misses:
+        print(f"  [{m['timestamp_display']}] {m['label']}")
+
+    print("\n--- All versions miss ---")
+    for m in all_miss:
         print(f"  [{m['timestamp_display']}] {m['label']}")
