@@ -2,7 +2,11 @@
 
 CUE indexes cooking videos for key instructional moments. Paste a YouTube URL and get a timestamped, interactive timeline of every ingredient addition, technique, measurement, and timing cue — synced to the video in real time.
 
-![Pipeline: download → transcribe → detect → stream](https://placeholder)
+### Home Page
+<img width="1512" height="860" alt="Screenshot 2026-05-17 at 9 51 35 PM" src="https://github.com/user-attachments/assets/332bfbca-7ec9-4933-9567-1f1c373f4ea4" />
+
+### Video Player
+
 
 ## How it works
 
